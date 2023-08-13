@@ -1,0 +1,510 @@
+---
+title: "Cross Tabulation in R"
+format: html
+editor: visual
+author: "Josh Greer"
+date: "08/13/2023"
+---
+
+## Motivation: Quotas in Survey Analysis
+
+In product research, clients often want to make sure participants taking the study are represent specific proportions of the data set.
+At work, we call these requirements quotas which are provided in the form of frequency tables.
+The R community has explored ways to create frequency tables, also called contingency tables or cross tables.
+In this notebook, I follow some example workflows that I've run into online.
+
+R has two flavors in terms of syntax, Base R and the Tidyverse.
+Base R refers to the default R syntax and functions that the language is built on and the Tidyverse is an opinionated suite of libraries built upon the concept of tidy evaluation.
+
+When looking for examples of creating contingency tables, I sought workflows that allowed me to
+
+-   Easily identify variables I want to create tables from
+
+-   Provides counts and frequencies
+
+-   Is up-to-date (from a library that was published to CRAN in 2023 or from an post written in the last year)
+
+-   Uses the Tidyverse suite is preferred but does not have to be built on top of it
+
+## Sections
+
+I found a post and two packages that address the creation of contingency tables.
+
+[How do you convert a tidy data frame to a contingency table?](https://community.rstudio.com/t/how-do-you-convert-a-tidy-data-frame-to-a-contingency-table/99562)
+
+[sjmisc - Data and Variable Transformation Functions](https://strengejacke.github.io/sjmisc/)
+
+[tabyls: a tidy, full-featured approach to counting things](https://www.rdocumentation.org/packages/janitor/versions/2.2.0/topics/tabyl)
+
+## Creating a Contingency Table with Tidyverse Functions
+
+In the [post](https://community.rstudio.com/t/how-do-you-convert-a-tidy-data-frame-to-a-contingency-table/99562), the author of the question provides the following example data that they would like to turn into a table:
+
+```{r}
+gender <- c("M","M","F","F")
+handed <- c("R","L","R","L")
+freq <- c(43, 9, 44, 4)
+df <- tibble(gender, handed, freq)
+```
+
+They mention they want to turn this image:
+
+![this](./images/this.png)
+
+Into this:
+
+![into_this](./images/into_this.png)
+
+Here's the accepted solution:
+
+```{r}
+suppressWarnings(suppressMessages(require(dplyr)))
+suppressWarnings(suppressMessages(require(tidyr)))
+suppressWarnings(suppressMessages(require(forcats)))
+suppressWarnings(suppressMessages(require(flextable)))
+suppressWarnings(suppressMessages(require(janitor)))
+
+df <- tibble(gender = c("M","M","F","F"),
+             handed = c("R","L","R","L"),
+             freq = c(43, 9, 44, 4)
+)
+
+df %>%
+    # Recode columns
+    transmute(
+        # Recode gender from M and F to "Male" and "Female" for row headers
+        Sex = fct_recode(gender, Male="M", Female="F"),
+        
+        # Recode handedness
+        Handedness = fct_recode(handed, `Right-handed`="R", `Left-handed`="L"),
+        
+        # Keep frequency
+        freq = freq) %>%
+    
+    # Make the contingency layout
+    pivot_wider(names_from=Handedness, values_from=freq) %>%
+    
+    # Add row and column totals
+    adorn_totals(c("row", "col")) %>%
+    
+    # Create a nice table layout
+    flextable() %>%
+    
+    # Add a merged header
+    add_header_row(values=c("", "Handedness"), colwidths=c(1,3)) %>%
+    
+    # Apply a grid
+    theme_box() %>%
+    
+    # Make first column bold
+    bold(j=1)
+
+
+```
+
+This produces a really nice output.
+Once I figure out how to add the percentages to it, as well as how to export to Excel, this would be a nice solution for my purposes at work.
+
+## sjmisc - Data and Variable Transformation Functions
+
+sjmisc is a package that focuses on the transformation of variables in a Tidyverse workflow.
+[source](https://strengejacke.github.io/sjmisc/) From looking at the date of commits on [GitHub](https://github.com/strengejacke/sjmisc/), it does not appear to be frequently maintained.
+The last time it was published on CRAN was in [2021](https://cloud.r-project.org/web/packages/sjmisc/index.html).
+However, the vignette demonstrating how to use the package fits well for my use case.
+
+The examples are based on a data set from the EUROFAMCARE project, a survey on the situation of family carers of older people in Europe.
+Using the package, we can explore how the gender and perception of the primary provider of the family as well as the cared-for person's dependency are associated with the family caretaker's quality of life.
+
+```{r}
+library(sjmisc)
+library(dplyr)
+
+# Data comes from the sjmisc package
+data(efc)
+
+head(efc)
+```
+
+#### Printing frequencies with labels
+
+The example explores the distribution of gender by plotting frequencies for labelled data with `frq()`.
+
+"This function requires either a vector or data frame as input and prints the variable label as first line, followed by a frequency-table with values, labels, counts and percentages of the vector."
+
+```{r}
+frq(efc$c161sex)
+```
+
+So it is easy to create a table out of a single column.
+The output is in a nice R format.
+It is descriptive.
+We also get the variable labels, values, counts and percentages.
+However, it isn't necessarily "client ready" output as was the solution using `flextable`.
+
+#### Finding variables in a data frame
+
+The example looks at the distribution of gender by the cared-for person's dependency.
+To create cross tables, we can use `flat_table()`.
+It requires the data as the first argument, followed by any number of variable names.
+
+But first, we need to know the name of the dependency-variable.
+This is where find_var() comes into play.
+It searches for variables in a data frame by
+
+```         
+- variable names,
+
+- variable labels,
+
+- value labels
+
+- or any combination of these.
+```
+
+By default, it looks for variable name and labels.
+The function also supports regex-patterns.
+By default, find_var() returns the column-indices, but you can also print a small "summary"" with the out-argument.
+
+```{r}
+# find all variables with "dependency" in name or label
+find_var(efc, "dependency", out = "table")
+```
+
+Variable in column 5, named e42dep, is what we are looking for.
+
+#### Print crosstables with labels
+
+Cross tabs of gender by dependency
+
+```{r}
+flat_table(efc, e42dep, c161sex)
+```
+
+Since the distribution of male and female carers is skewed, let's see the proportions.
+To compute crosstables with row or column percentages, use the margin-argument:
+
+```{r}
+flat_table(efc, e42dep, c161sex, margin="col")
+```
+
+Again, this is a convenient way to get the counts and percentages of variables in the data set.
+
+#### Recoding variables
+
+"Next, we need the negatice impact of care (neg_c_7) and want to create three groups: low, middle and high negative impact. We can easily recode and label vectors with rec(). This function does not only recode vectors, it also allows direct labelling of categories inside the recode-syntax (this is optional, you can also use the val.labels-argument). We now recode neg_c_7 into a new variable burden. The cut-points are a bit arbitrary, for the sake of demonstration."
+
+```{r}
+efc$burden <- rec(
+    efc$neg_c_7,
+    rec = c("min:9=1 [low]; 10:12=2 [moderate]; 13:max=3 [high]; else=NA"),
+    var.label = "Subjective burden",
+    as.num = FALSE # Creates a factor
+)
+# Printing frequencies
+frq(efc$burden)
+```
+
+"You can see the variable burden has a variable label ("Subjective burden"), which was set inside rec(), as well as three values with labels ("low", "moderate" and "high"). From the lowest value in neg_c_7 to 9 were recoded into 1, values 10 to 12 into 2 and values 13 to the highest value in neg_c_7 into 3. All remaining values are set to missing (else=NA -- for details on the recode-syntax, see ?rec)"
+
+#### Grouped Dataframes
+
+"How is burden distributed by gender? We can group the data and print frequencies using frq() for this as well, as this function also accepts grouped data frames. Frequencies for grouped data frames first print the group-details (variable name and category), followed by the frequency table. Thanks to labelled data, the output is easy to understand."
+
+```{r}
+efc %>%
+    select(burden, c161sex) %>%
+    group_by(c161sex) %>%
+    frq()
+```
+
+#### Nested data frames
+
+"Let's investigate the association between quality of life and burden across the different dependency categories, by fitting linear models for each category of e42dep. We can do this using nested data frames. nest() from the tidyr-package can create subsets of a data frame, based on grouping criteria, and create a new list-variable, where each element itself is a data frame (so it's nested, because we have data frames inside a data frame).
+
+In the following example, we group the data by e42dep, and "nest" the groups.
+Now we get a data frame with two columns: First, the grouping variable (e42dep) and second, the datasets (subsets) for each country as data frame, stored in the list-variable data.
+The data frames in the subsets (in data) all contain the selected variables burden, c161sex and quol_5 (quality of life)."
+
+```{r}
+efc$e42dep <- to_label(efc$e42dep, drop.levels=TRUE)
+efc %>%
+    select(e42dep, burden, c161sex, quol_5) %>%
+    group_by(e42dep) %>%
+    tidyr::nest()
+```
+
+#### Get coefficients of nested models
+
+"Using map() from the purrr-package, we can iterate this list and apply any function on each data frame in the list-variable"data". We want to apply the lm()-function to the list-variable, to run linear models for all "dependency-datasets". The results of these linear regressions are stored in another list-variable, models (created with mutate()). To quickly access and look at the coefficients, we can use spread_coef()."
+
+```{r}
+efc %>%
+    select(e42dep, burden, c161sex, quol_5) %>%
+    group_by(e42dep) %>%
+    tidyr::nest() %>%
+    na.omit() %>% # remove nested group for NA
+    arrange(e42dep) %>% # arrange by order of levels
+    mutate(models = purrr::map(
+        data, ~lm(quol_5 ~ burden + c161sex, data = .))
+    ) %>% 
+    spread_coef(models)
+```
+
+"We see that higher burden is associated with lower quality of life, for all dependency-groups. The se and p.val-arguments add standard errors and p-values to the output. model.term returns the statistics only for a specific term. If you specify a model.term, arguments se and p.val automatically default to TRUE."
+
+```{r}
+efc %>%
+    select(e42dep, burden, c161sex, quol_5) %>%
+    group_by(e42dep) %>%
+    tidyr::nest() %>%
+    na.omit() %>% # remove nested group for NA
+    arrange(e42dep) %>% # arrange by order of levels
+    mutate(models = purrr::map(
+        data, ~lm(quol_5 ~ burden + c161sex, data = .))
+    ) %>% 
+    spread_coef(models, burden3)
+```
+
+Overall, this package is very powerful.
+It allows us to create contingency tables, providing a lot of detail.
+It is also built on the Tidyverse.
+
+## tabyls: a tidy, fully-featured approach to counting things
+
+#### Why tabyl
+
+The built-in, Base R function for counting `table()` does not provide a lot of features.
+
+```         
+    - It doesn’t accept data.frame inputs (and thus doesn’t play nicely with the %>% pipe)
+    
+    - It doesn’t output data.frames
+    
+    - Its results are hard to format. Compare the look and formatting choices of an R table to a Microsoft Excel PivotTable or even the table formatting provided by SPSS.
+```
+
+`tabyl()` is part of the janitor package because counting is such a fundamental part of data cleaning and exploration.
+
+`tabyl()` is tidyverse-aligned and is built on dplyr and tidyr packages.
+
+The `adorn_` functions are built to work on `tabyls` but have been adapted to work with similar, non-tabyl data.frames that need formatting.
+
+#### Examples
+
+```{r}
+library(openxlsx)
+library(dplyr)
+library(janitor)
+
+suppressMessages(suppressWarnings(library(tidyverse)))
+
+survey_exit <- as_tibble(openxlsx::read.xlsx(xlsxFile="./data.xlsx"))
+
+head(survey_exit)
+
+survey_exit %>%
+    filter(CELL == 2)
+```
+
+Tabulating a single variable is the simplest kind of tabyl:
+
+```{r}
+table_1 <- survey_exit %>%
+    tabyl(CELL)
+table_1
+```
+
+```{r}
+x <- c("big","big","small","small","small",NA)
+tabyl(x)
+```
+
+You can use `adorn_` helper functions for single columns, but they are built for 2-way tabyles.
+
+```{r}
+table_1 %>%
+    adorn_totals("row") %>%
+    adorn_pct_formatting()
+```
+
+```{r}
+survey_exit %>%
+    group_by(ETH) %>%
+    summarize(count = n(),
+              percentage = (count / sum(count))*100 ) %>%
+    adorn_totals("row")
+
+# %>%
+    #adorn_totals("row") %>%
+    #adorn_pct_formatting()
+```
+
+```{r}
+survey_exit %>%
+    filter(CELL==1) %>%
+    select(ETH) %>%
+    rec(rec="1=1;2=2;3=3;4=4;5=5",val.labels=c("White","Black","Hispanic","Asian","Other")) %>%
+    frq()
+
+survey_exit %>%
+    filter(CELL==1) %>%
+    tabyl(ETH, AGE) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("col") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+
+survey_exit %>%
+    filter(CELL==1) %>%
+    tabyl(ETH, AGE) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+
+# This is what we want
+survey_exit %>%
+    filter(CELL==1) %>%
+    tabyl(ETH, AGE) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+
+survey_exit %>%
+    filter(CELL==2) %>%
+    tabyl(ETH, AGE) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+
+exit_with_factors <- survey_exit %>%
+    mutate(`Age Category` = case_when(
+        AGE == 1 ~ "Teen",
+        AGE == 2 ~ "Adult"),
+        `Age Category` = factor(`Age Category`, levels=c("Teen", "Adult")),
+        
+        Ethnicity = case_when(
+            ETH == 1 ~ "Caucasian",
+            ETH == 2 ~ "African American",
+            ETH == 3 ~ "Hispanic/Latino",
+            ETH == 4 ~ "Asian",
+            ETH == 5 ~ "Other"
+        ),
+        Ethnicity = factor(Ethnicity, levels=c("Caucasian","African American",
+                                               "Hispanic/Latino","Asian","Other"))
+    )
+exit_with_factors
+
+# This is what we want
+survey_exit %>%
+    transmute(
+        Ethnicity = fct_recode(
+            ETH, Caucasian=1, `African American`=2,
+            `Hispanic/Latino`=3, Asian=4, Other=5
+        ),
+        Age = fct_recode(
+            AGE, Teens=1, Adults=2
+        )
+    ) %>%
+    filter(CELL==1) %>%
+    tabyl(ETH, AGE) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+
+```
+
+# Working on the survey data
+
+## Create factors
+
+```{r}
+# Keeps the numeric value as a number, don't have to change to a string
+exit_with_factors <- survey_exit %>%
+    mutate(`Age Category` = case_when(
+        AGE == 1 ~ "Teen",
+        AGE == 2 ~ "Adult"),
+        `Age Category` = factor(`Age Category`, levels=c("Teen", "Adult")),
+        
+        Ethnicity = case_when(
+            ETH == 1 ~ "Caucasian",
+            ETH == 2 ~ "African American",
+            ETH == 3 ~ "Hispanic/Latino",
+            ETH == 4 ~ "Asian",
+            ETH == 5 ~ "Other"
+        ),
+        Ethnicity = factor(Ethnicity, levels=c("Caucasian","African American",
+                                               "Hispanic/Latino","Asian","Other"))
+    )
+exit_with_factors
+
+# This is what we want
+exit_with_factors %>%
+    filter(CELL==1) %>%
+    tabyl(Ethnicity, `Age Category`) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+
+```
+
+#### This is how we want to use tabyls
+
+```{r}
+survey_exit %>%
+    mutate(ETH = as.character(ETH), 
+           AGE = as.character(AGE),
+           CELL = as.character(CELL)) %>%
+    mutate(
+        Ethnicity = fct_recode(
+            ETH, Caucasian="1", `African American`="2",
+            `Hispanic/Latino`="3", Asian="4", Other="5"
+        ),
+        Age_Category = fct_recode(
+            AGE, Teens="1", Adults="2"
+        ),
+        CELL = fct_recode(
+            CELL, Cell_1="1", Cell_2="2"
+        )
+    ) %>%
+    tabyl(Ethnicity, Age_Category, CELL) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    adorn_ns()
+```
+
+```{r}
+survey_exit %>%
+    mutate(ETH = as.character(ETH), 
+           AGE = as.character(AGE),
+           CELL = as.character(CELL)) %>%
+    mutate(
+        Ethnicity = fct_recode(
+            ETH, Caucasian="1", `African American`="2",
+            `Hispanic/Latino`="3", Asian="4", Other="5"
+        ),
+        Age_Category = fct_recode(
+            AGE, Teens="1", Adults="2"
+        ),
+        CELL = fct_recode(
+            CELL, Cell_1="1", Cell_2="2"
+        ),
+        Hispanic = case_when(Ethnicity == "Hispanic/Latino" ~ "Hispanic",
+                                 Ethnicity == "African American" ~ "Non-Hispanic",
+                                 Ethnicity == "Caucasian" ~ "Non-Hispanic",
+                                 Ethnicity == "Asian" ~ "Non-Hispanic",
+                                 Ethnicity == "Other" ~ "Non-Hispanic"),
+        Hispanic = fct_recode(Hispanic, Hispanic="Hispanic", `Non-Hispanic`="Non-Hispanic")
+    ) %>%
+    tabyl(Hispanic, Age_Category, CELL) %>%
+    adorn_totals(c("row", "col")) %>%
+    adorn_percentages("row") %>%
+    adorn_pct_formatting(digits=0) %>%
+    pluck(1) %>% # Cell 1
+    flextable()
+```
